@@ -1,28 +1,76 @@
 import inspect
 
-try:
-    from itertools import tee, count    
-except:
-     def count(n=0):
-         while True:
-             yield n
-             n += 1
-     
-     def tee(iterable):
-         def gen(next, data={}, cnt=[0]):
-             for i in count():
-                 if i == cnt[0]:
-                     item = data[i] = next()
-                     cnt[0] += 1
-                 else:
-                     item = data.pop(i)
-                 yield item
-         it = iter(iterable)
-         return (gen(it.next), gen(it.next))
+#try:
+#    from itertools import tee, count    
+#except:
+#     def count(n=0):
+#         while True:
+#             yield n
+#             n += 1
+#     
+#     def tee(iterable):
+#         def gen(next, data={}, cnt=[0]):
+#             for i in count():
+#                 if i == cnt[0]:
+#                     item = data[i] = next()
+#                     cnt[0] += 1
+#                 else:
+#                     item = data.pop(i)
+#                 yield item
+#         it = iter(iterable)
+#         return (gen(it.next), gen(it.next))
 
+class Input: 
+    def __init__(self, data, position=0):
+        self._data = data
+        self._position = position            
+
+    def next(self):        
+        raise NotImplementedError()
+
+    def tee(self):
+        clone = self.__class__(self._data, self._position)
+        return self, clone
+                
+class StringInput(Input):
+    def next(self):
+        try:
+            c = self._data[self._position]          
+        except:
+             raise StopIteration
+        self._position += 1
+        return c
+            
+
+class FileInput(Input):
+    def next(self):
+        self.data.seek(self._postion)
+        c = self._data.read()          
+        if c == "":
+            raise StopIteration
+        self._position += 1
+        return c
+        
+class IterableInput(Input):
+    def tee(self):
+        import itertools
+        return itertools.tee(self._data)
+
+    def next(self):
+        return self._data.next()
+        
+def tee(anInput):
+    return anInput.tee()
                  
-def parse(parser, string):
-    return parser.run(iter(string), {})
+def parse(parser, data):
+    if type(data) is str:
+        theInput = StringInput(data)
+    elif type(data) is file:
+        theInput = FileInput(data)
+    else:
+        theInput = IterableInput(data)
+        
+    return parser.run(theInput, {})
                  
 def func_name(fct):
     try:
@@ -91,7 +139,7 @@ class Parser:
         else:
             self._parser = None
         
-    def getChildren(self, total=False):
+    def getChildren(self, total=False):  
         return self._children
     
     def assign(self, nomVar):
@@ -145,12 +193,13 @@ class Parser:
     def __getitem__(self, nomVar):
         return self.assign(nomVar)
     
-#    def __call__(self, data, dictVars):
+    def __call__(self, *args, **kwargs):
+        return self.__class__(*args, **kwargs)
 #        data, dataTmp = tee(data)
 #        print "run %s on '%s' (%s)"%(repr(self), "".join(list(dataTmp)), #dictVars)
 #        for res in self.run(data, dictVars):
 #            yield res
-#        yield ResultFail() 
+#       yield ResultFail() 
         
     def run(self, data, dictVars):
         raise NotImplementedError
@@ -181,6 +230,9 @@ class Parser:
     def getCharacteristics(self):
         return self._characteristics
     
+    def getParser(self):
+        return self        
+        
     def asText(self):
         return repr(self)
             
@@ -317,12 +369,15 @@ class FunctionParser(Parser):
             if not res:
                 continue
             funcArgs, varArgs, varkw, defaults = self.inspectData
-            dictArgs = {}
-            for var in funcArgs:
-                try:
-                    dictArgs[var] = dictVars2[var]
-                except KeyError:
-                    pass
+            if varkw is not None:
+                dictArgs = dictVars
+            else:
+                dictArgs = {}
+                for var in funcArgs:
+                    try:
+                        dictArgs[var] = dictVars2[var]
+                    except KeyError:
+                        pass
             yield ResultOK(self.function(**dictArgs)), data2, dictVars
         yield ResultFail(), dataSave, dictVars
     
@@ -482,12 +537,10 @@ class SubParser(Parser):
         self._result = None
 
         
-    def getChildren(self, total=False):      
+    def getChildren(self, total=False):
         if total:
-            print self.__class__
             return [self.getParser()]
-        else:
-            return []
+        return []
         
     def getParser(self):
         raise NotImplementedError
@@ -527,7 +580,7 @@ class TextParser(LitParser):
 
     def getParser(self):
         if len(self._txt) == 0:
-            return nothing()
+            return nothing
         if len(self._txt) == 1:
             return lit(self._txt)
         return ConjonctionParser([lit(c) for c in self._txt])
@@ -559,8 +612,7 @@ def debug(a):
 
 item  = CharParser()
 
-def nothing(val=None):
-    return ConstParser(val)
+nothing = ConstParser()
     
 def fail(p, val=None):
     return FailureParser(p, val)
