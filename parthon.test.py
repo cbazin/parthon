@@ -2,17 +2,19 @@ from parthon import *
 
 def simplify(parser):
     parserType = parser.__class__
-    if parserType in (ConjonctionParser, DisjonctionParser):
-        newChildren = []
-        for child in parser.getChildren():
-            simplify(child)
+    oldChildren = parser.getChildren(True)
+    newChildren = []
+    while oldChildren:
+        child = oldChildren.pop(0)
+        if parserType in (ConjonctionParser, DisjonctionParser):
             childType = child.__class__
-            if childType != parserType:
-                newChildren.append(child)
+            if childType == parserType:
+                oldChildren = child.getChildren(True) + oldChildren
                 continue
-            for grandChild in child.getChildren():
-                newChildren.append(grandChild)
-        parser.setChildren(newChildren) 
+        newChildren.append(child)
+    for child in newChildren:
+         simplify(child)
+    parser.setChildren(newChildren) 
     return parser
 
         
@@ -43,8 +45,8 @@ class Grammar:
   def future_(self, a):
     raise NotImplementedError    
     
-  def conjonction_(self, a, op=None, b=None):
-    if op is None:
+  def conjonction_(self, a, b=None):
+    if b is None:
       return a
     return a >> b
 
@@ -55,18 +57,23 @@ class Grammar:
         
 
   def __init__(self):    
+    def suite(pa, fct):
+      def B(a):
+        return (((ConstParser(a)["a"] + pa["b"]) >= fct)["a"] / B) | nothing(a)
+      return  pa["a"] / B 
+  
     def operation_la(pa, op, fct):
       def B(a):
-        return (((ConstParser(a)["a"] - op["op"] - pa["b"]) >= fct)["a"] / B) | (nothing() >= (lambda: a))
+        return (((ConstParser(a)["a"] - op["op"] - pa["b"]) >= fct)["a"] / B) | nothing(a)
       return  pa["a"] / B 
 
-    def operator_ra(pa, lstOpFct):
+    def postfix(pa, lstOpFct):
       def B(a):
         lstOptions = []
         for op, fct in lstOpFct:
             lstOptions.append(ConstParser(a)["a"] >> op >= fct)
         options = DisjonctionParser(lstOptions)
-        return (((optSpaces >> options["a"] >= iden)["a"]) / B) | (nothing() >= (lambda: a))
+        return ((optSpaces >> options["a"] >= iden)["a"] / B) | nothing(a)
       return  pa["a"] / B 
       
     charText = txt("\\\"", "\"") | txt("\\\\", "\\") | notInList("\\\"")
@@ -87,15 +94,15 @@ class Grammar:
              
              
     atom = FctParser(fct_atom)
-    postFixedAtom = operator_ra(atom, [(lit("?"), self.maybe_),
-                                       (lit("*"), self.many0_),
-                                       (lit("+"), self.many_),
-                                       (lit("!"), self.not_),
-                                       (lit("&"), self.future_),
-                                      ]
+    postFixedAtom = postfix(atom, [(lit("?"), self.maybe_),
+                                   (lit("*"), self.many0_),
+                                   (lit("+"), self.many_),
+                                   (lit("!"), self.not_),
+                                   (lit("&"), self.future_),
+                                  ]
                                )
     #fact = operation_la(atom, power)
-    exprAnd = operation_la(postFixedAtom, lit(","), self.conjonction_)
+    exprAnd = suite(postFixedAtom, self.conjonction_)
     exprOr  = operation_la(exprAnd, lit("|"), self.disjonction_)
 
     expr = exprOr
@@ -112,12 +119,15 @@ class Grammar:
         #print "res (%2d): %s, %s, %s" % (n, r, repr(''.join(d)), dic)
         print "++++++++"
         print r.getValue()
-        print simplify(r.getValue()).asText()
+        print "++++++++"
+        print r.getValue().asTree()
+        print "--------"
+        print simplify(r.getValue()).asTree()
         print "--------"
         break          
 
 def main():            
-  text = '"a?\\"bba"|(b?|c,c)'
+  text = '"a?\\"bba"|(b?|c c)|"aa"|"bb"'
       
   g = Grammar()
   print g._grammarParser.asTree()
