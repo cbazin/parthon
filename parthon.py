@@ -20,30 +20,51 @@ import inspect
 #         it = iter(iterable)
 #         return (gen(it.next), gen(it.next))
 
-class Input: 
-    def __init__(self, data, position=0):
-        self._data = data
-        self._position = position            
+class ParseError(Exception):
+    def __init__(self, state, code, msg):
+        self._state = state
+        self._code = code
+        self._msg = msg
 
-    def next(self):        
-        raise NotImplementedError()
+class Input: 
+    def __init__(self, data, source=None):
+        self._data = data
+        if source is None:
+            self._position = 0            
+            self._line = 0
+            self._col = 0
+        else:
+            self._position = source._position
+            self._line = source._line
+            self._col = source._col
+
+    def readChar(self):
+        raise NotImplementedError        
+        
+    def next(self):
+        c = self.readChar()
+        if c == "\n":
+            self._line += 1
+            self._col = 0
+        else:
+            self._col += 1
+        return c
 
     def tee(self):
-        clone = self.__class__(self._data, self._position)
+        clone = self.__class__(self._data, self)
         return self, clone
                 
 class StringInput(Input):
-    def next(self):
+    def readChar(self):
         try:
             c = self._data[self._position]          
         except:
              raise StopIteration
         self._position += 1
         return c
-            
 
 class FileInput(Input):
-    def next(self):
+    def readChar(self):
         self.data.seek(self._postion)
         c = self._data.read()          
         if c == "":
@@ -56,22 +77,35 @@ class IterableInput(Input):
         import itertools
         return itertools.tee(self._data)
 
-    def next(self):
+    def readChar(self):
         return self._data.next()
+        
         
 def tee(anInput):
     return anInput.tee()
                  
 def parse(parser, data):
-    if type(data) is str:
+    if isinstance(data, Input):
+        theInput = data
+    elif type(data) is str:
         theInput = StringInput(data)
     elif type(data) is file:
         theInput = FileInput(data)
     else:
         theInput = IterableInput(data)
+
+    def iterResult():
+      try :
+        for res, data2, dictVars  in parser.run(theInput, {}):
+          if res:
+            yield res, data2, dictVars
+      except ParseError, e:
+        print "ParseError(%s) : "%(e._code)
+        print "  - line %s col %s"%(e._state._line, e._state._col)
+        print "  - Error %s - %s"%(e._code, e._msg)  
         
-    return parser.run(theInput, {})
-                 
+    return iterResult()    
+             
 def func_name(fct):
     try:
         return fct.func_name
@@ -467,6 +501,14 @@ class FailureParser(Parser):
             else:
                 yield ResultOK(self.value), data2, dictVars
 
+class ErrorParser(Parser):
+    def __init__(self, code=1, msg="error"):                
+        Parser.__init__(self, [], [code, msg])
+        self._code = code
+        self._msg = msg
+
+    def run(self, data, dictVars):
+        raise ParseError(data, self._code, self._msg)
                 
 class ManyParser(Parser):
     def __init__(self, parser, constructor, init, atLeastOne=False, maximum=False):
@@ -738,6 +780,7 @@ number = maxiChars(digit)["x"] >= convert(int)
 manySpacesParser = manySpaces = ManySpacesParser() #manyChars(space)
 optSpacesParser  = optSpaces  = OptSpacesParser()  #manyChars0(space)
 
+error = ErrorParser()
 
 def mark(m=None):
     def f(a):

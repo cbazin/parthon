@@ -83,14 +83,16 @@ class Grammar:
      
     pureText = (lit('"') >> manyChars(charText)["a"] >> lit('"') >= iden)
     parserName = word
+    
+    errorAtom = error(2, "An atom is expected there")
       
     def fct_atom():
       return (
              (lit('(') - expr["a"] - lit(')') >= iden)  |
              (pureText["x"]        >= self.text_) |
              (parserName["x"]      >= self.parser_) | 
-             (lit("_")             >= self.nothing_)
-             )
+             (lit("_")             >= self.nothing_) |
+             errorAtom)
              
              
     atom = FctParser(fct_atom)
@@ -111,7 +113,12 @@ class Grammar:
 
     
   def parse(self, text):
-    for n, ares in enumerate(parse(self._grammarParser, text)):
+    print text
+    try:
+      parseResult = parse(self._grammarParser, text)
+    except ParseError, e:
+      print e
+    for n, ares in enumerate(parseResult):
       r, d, dic = ares
       print "/////////////////////////////////////////"
       print text
@@ -125,7 +132,8 @@ class Grammar:
         print simplify(r.getValue()).asTree()
         print "--------"
         break          
-
+   
+        
 def main():            
   text = '"a?\\"bba"|(b?|c c)|"aa"|"bb"'
       
