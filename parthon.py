@@ -95,10 +95,11 @@ def parse(parser, data):
         theInput = IterableInput(data)
 
     def iterResult():
+      context = ExecutionContext()
       try :
-        for res, data2, dictVars  in parser.run(theInput, {}):
+        for res, data2, context in parser.run(theInput, context):
           if res:
-            yield res, data2, dictVars
+            yield res, data2, context
       except ParseError, e:
         print "ParseError(%s) : "%(e._code)
         print "  - line %s col %s"%(e._state._line, e._state._col)
@@ -143,6 +144,20 @@ class ResultFail(Result):
     def __repr__(self):
         return "ResultFail()"
 
+class ExecutionContext:
+    def __init__(self):
+        self._dictVars = {}
+        self._parsers = {}
+        self._parsers["optSpaces"] = optSpaces
+        self._parsers["manySpaces"] = manySpaces
+        self._parsers["comments"] = nothing
+
+    def __getitem__(self, k):
+        return self._dictVars[k]        
+
+    def __setitem__(self, k, v):
+        self._dictVars[k] = v
+                
 #class State:
 #    def __init__(self, flux, dictVars):
 #        self.flux = flux
@@ -176,9 +191,6 @@ class Parser:
     def getChildren(self, total=False):  
         return self._children
     
-    def assign(self, nomVar):
-        return AssignParser(self, nomVar)
-    
     def disjonction(self, other):
         return DisjonctionParser([self, other])
 
@@ -192,7 +204,7 @@ class Parser:
         return ConjonctionParser([other, self])
 
     def conjonctionSpaces(self, separator, other):
-        return ConjonctionParser([separator, other]).rconjonction(self)
+        return ConjonctionParser([self, separator, other])
     
     def argsParser(self, fct):
         return ArgsParser(self, fct)
@@ -200,17 +212,30 @@ class Parser:
     def function(self, func):
         return FunctionParser(self, func)
     
+    def assign(self, nomVar):
+        return AssignParser(self, nomVar)
+        
+    __or__ = disjonction
+    __ror__ = rdisjonction
+    __div__ = argsParser 
+    __ge__ = function
+    __rshift__ = conjonction
+    __rrshift__ = rconjonction
+    __getitem__ = assign            
+    
+
+    def __sub__(self, other):
+        return self.conjonctionSpaces(ContextualParser("optSpaces"), other)
+    
+    def __add__(self, other):
+        return self.conjonctionSpaces(ContextualParser("manySpaces"), other)
+    
+    """    
     def __or__(self, other):
         return self.disjonction(other)       
         
     def __ror__(self, other):
         return self.rdisjonction(other)       
-
-    def __sub__(self, other):
-        return self.conjonctionSpaces(optSpacesParser, other)
-    
-    def __add__(self, other):
-        return self.conjonctionSpaces(manySpacesParser, other)
 
     def __div__(self, fct):
         return self.argsParser(fct)
@@ -226,6 +251,7 @@ class Parser:
     
     def __getitem__(self, nomVar):
         return self.assign(nomVar)
+    """
     
     def __call__(self, *args, **kwargs):
         return self.__class__(*args, **kwargs)
@@ -235,7 +261,12 @@ class Parser:
 #            yield res
 #       yield ResultFail() 
         
-    def run(self, data, dictVars):
+    def runCF(self, data):
+        subContext = ExecutionContext()
+        for res, data, _ in self.run(data, subContext):
+            yield res, data, _
+
+    def run(self, data, context):
         raise NotImplementedError
     
     def asTree(self, indent=0):
@@ -281,32 +312,33 @@ class CharParser(Parser):
     def __init__(self):
         Parser.__init__(self, [], [])
 
-    def run(self, data, dictVars):
+    def run(self, data, context):
         try:
             res = data.next()
         except StopIteration:
-            yield ResultFail(), data, dictVars
+            yield ResultFail(), data, context
         else:    
-            yield ResultOK(res), data, dictVars                
+            yield ResultOK(res), data, context                
 
 class ConstParser(Parser):
     def __init__(self, value=None):
         Parser.__init__(self, [], [value])
         self.value = value
     
-    def run(self, data, dictVars):
-        yield ResultOK(self.value), data, dictVars
+    def run(self, data, context):
+        yield ResultOK(self.value), data, context
         
 class AssignParser(Parser):
     def __init__(self, parser, nomVar):
         Parser.__init__(self, [parser], [nomVar])
         self.nomVar = nomVar
     
-    def run(self, data, dictVars):
-        for res, data, _ in self._parser.run(data, {}):
+    def run(self, data, context):
+        subContext = ExecutionContext()
+        for res, data, _ in self._parser.runCF(data):
             if res:
-                dictVars[self.nomVar] = res.getValue()
-            yield res, data, dictVars
+                context[self.nomVar] = res.getValue()
+            yield res, data, context
 
     def asText(self):
         return "(%s)[%s]"%(self._parser.asText(), repr(self.nomVar))
@@ -343,19 +375,19 @@ class ConjonctionParser(ComposableParser):
         self._children.insert(0, other)
         return self
                     
-    def run(self, data, dictVars, numParser=0):
+    def run(self, data, context, numParser=0):
        if numParser == len(self._children):
-           yield ResultOK([]), data, dictVars
+           yield ResultOK([]), data, context
        else:
            parser = self._children[numParser]
-           for item, data2, dictVars in parser.run(data, dictVars):
+           for item, data2, context in parser.run(data, context):
                if item:
                    itemValue = item.getValue()
-                   for rest, data3, dictVars in self.run(data2, dictVars, numParser+1):
+                   for rest, data3, context in self.run(data2, context, numParser+1):
                        if rest:
                            rest.getValue().insert(0, itemValue)    
-                           yield rest, data3, dictVars
-           yield ResultFail(), data, dictVars           
+                           yield rest, data3, context
+           yield ResultFail(), data, context           
                          
 #    def conjonction(self, other):
 #        self.lstParsers.append(other)
@@ -375,14 +407,14 @@ class ConjonctionParser(ComposableParser):
                     
 class DisjonctionParser(ComposableParser):
     
-    def run(self, data, dictVars):
+    def run(self, data, context):
         data, dataSave = tee(data)
         for parser in self._children:
             data, data2 = tee(data)
-            for res, data3, _ in parser.run(data2, {}):
+            for res, data3, _ in parser.runCF(data2):
                 if res: 
-                    yield res, data3, dictVars
-        yield ResultFail(), dataSave, dictVars
+                    yield res, data3, context
+        yield ResultFail(), dataSave, context
                 
 #    def __repr__(self):
 #        return "DisjonctionParser(%s)"%(self.lstParsers)
@@ -397,23 +429,23 @@ class FunctionParser(Parser):
         self.function = function
         self.inspectData = inspect.getargspec(function)
             
-    def run(self, data, dictVars):
+    def run(self, data, context):
         data, dataSave = tee(data)
-        for res, data2, dictVars2 in self._parser.run(data, {}):
+        for res, data2, context2 in self._parser.runCF(data):
             if not res:
                 continue
             funcArgs, varArgs, varkw, defaults = self.inspectData
             if varkw is not None:
-                dictArgs = dictVars
+                dictArgs = context._dictVars
             else:
                 dictArgs = {}
                 for var in funcArgs:
                     try:
-                        dictArgs[var] = dictVars2[var]
+                        dictArgs[var] = context2[var]
                     except KeyError:
                         pass
-            yield ResultOK(self.function(**dictArgs)), data2, dictVars
-        yield ResultFail(), dataSave, dictVars
+            yield ResultOK(self.function(**dictArgs)), data2, context
+        yield ResultFail(), dataSave, context
     
     def __repr__(self):
         return "FunctionParser(%s, %s)"%(self._parser, func_name(self.function))
@@ -428,9 +460,9 @@ class ArgsParser(Parser):
         self.function = function
         self.inspectData = inspect.getargspec(function)        
     
-    def run(self, data, dictVars):
+    def run(self, data, context):
         data, dataSave = tee(data)
-        for res, data2, dictVars2 in self._parser.run(data, {}):
+        for res, data2, context2 in self._parser.runCF(data):
 #            dataSave, data = tee(dataSave)
             if not res:
                 continue
@@ -442,13 +474,13 @@ class ArgsParser(Parser):
             dictArgs = {}
             for var in funcArgs:
                 try:
-                    dictArgs[var] = dictVars2[var]
+                    dictArgs[var] = context2[var]
                 except KeyError:
                     pass
             parser = self.function(**dictArgs)
-            for res, data2, dictVars3 in parser.run(data2, dictVars):
-                yield res, data2, dictVars
-        yield ResultFail(), dataSave, dictVars
+            for res, data2, context3 in parser.run(data2, context):
+                yield res, data2, context
+        yield ResultFail(), dataSave, context
     
     def __repr__(self):
         return "ArgsParser(%s, %s)"%(self._parser, func_name(self.function))
@@ -470,13 +502,13 @@ class SatParser(Parser):
             return x
         return ResultFail()
     
-    def run(self, data, dictVars):
+    def run(self, data, context):
         data, dataSave = tee(data)
-        for res, data2, _  in self._parser.run(data, {}):
+        for res, data2, _  in self._parser.runCF(data):
             if not res:
-                yield ResultFail(), data2, dictVars
+                yield ResultFail(), data2, context
             else:
-                yield self.test(res), data2, dictVars
+                yield self.test(res), data2, context
 
     def asText(self):
         return "sat(%s, %s)"%(self.parser.asText(), func_name(self.function))        
@@ -493,13 +525,13 @@ class FailureParser(Parser):
         Parser.__init__(self, [parser], [value])
         self.value  = None
         
-    def run(self, data, dictVars):
+    def run(self, data, context):
         data, dataSave = tee(data)
-        for res, data2, _  in self._parser.run(data, {}):
+        for res, data2, _  in self._parser.runCF(data):
             if res:
-                yield ResultFail(), data2, dictVars
+                yield ResultFail(), data2, context
             else:
-                yield ResultOK(self.value), data2, dictVars
+                yield ResultOK(self.value), data2, context
 
 class ErrorParser(Parser):
     def __init__(self, code=1, msg="error"):                
@@ -507,9 +539,12 @@ class ErrorParser(Parser):
         self._code = code
         self._msg = msg
 
-    def run(self, data, dictVars):
+    def run(self, data, context):
         raise ParseError(data, self._code, self._msg)
                 
+        
+                
+        
 class ManyParser(Parser):
     def __init__(self, parser, constructor, init, atLeastOne=False, maximum=False):
         Parser.__init__(self, [parser], [constructor, init, atLeastOne, maximum])
@@ -518,44 +553,58 @@ class ManyParser(Parser):
         self.atLeastOne = atLeastOne
         self.maximum = maximum
         
-    def run(self, data, dictVars):
-        for res in self.runBis(data, dictVars, self.atLeastOne, self.maximum):
+    def run(self, data, context):
+        for res in self.runBis(data, context, self.atLeastOne, self.maximum):
             yield res
         
-    def runBis(self, data, dictVars, atLeastOne=False, maximum=False):
+    def runBis(self, data, context, atLeastOne=False, maximum=False):
         res = self.init
         data, saveData = tee(data)
-        listePossibles = [(ResultOK(res), saveData, dictVars)]
+        listePossibles = [(ResultOK(res), saveData, context)]
         noItem = True
-        for item, data, _ in self._parser.run(data, {}):
+        for item, data, _ in self._parser.runCF(data):
             if item:
                 noItem = False
-                for rest, data2, _ in self.runBis(data, {}, False, maximum):
+                for rest, data2, _ in self.runBis(data, ExecutionContext(), False, maximum):
                     if rest:
                         res = self.constructor(item.getValue(), rest.getValue())
-                        yield ResultOK(res), data2, dictVars
+                        yield ResultOK(res), data2, context
         if noItem:
             if atLeastOne:
-                yield ResultFail(), saveData, dictVars
+                yield ResultFail(), saveData, context
             else:
-                yield ResultOK(self.init), saveData, dictVars
+                yield ResultOK(self.init), saveData, context
         elif not maximum:
-                yield ResultOK(self.init), saveData, dictVars                         
+                yield ResultOK(self.init), saveData, context
 
                 
 class NamedParser(Parser):
     def __init__(self, parserName):
         Parser.__init__(self, [], [parserName])
-        self.parserName = parserName                         
+        self._parserName = parserName                         
                                                                         
-    def run(self, data, dictVars):
+    def run(self, data, context):
         try:
-            for r in self._parser.run(data, dictVars):
+            parser = vars()[self._parserName]
+            for r in parser.run(data, context):
                 yield r
         except NameError:
-            print "The parser: '%s' is not defined"%self.parserName
+            print "The parser: '%s' is not defined"%self._parserName
         
+class ContextualParser(Parser):
+    def __init__(self, parserName):                
+        Parser.__init__(self, [], [parserName])
+        self._parserName = parserName
+
+    def run(self, data, context):
+        try:
+            parser = context._parsers[self._parserName]
+            for r in parser.run(data, context):
+                yield r
+        except KeyError:
+            print "The parser: '%s' is not defined"%self._parserName
         
+                
 class FctParser(Parser):
     def __init__(self, fctName, args=[], kwargs={}):
         Parser.__init__(self, [], [fctName, args, kwargs])
@@ -563,10 +612,10 @@ class FctParser(Parser):
         self.args = args
         self.kwargs = kwargs
                                                                         
-    def run(self, data, dictVars):
+    def run(self, data, context):
         try:
             parser = self.fctName(*self.args, **self.kwargs)
-            for r in parser.run(data, dictVars):
+            for r in parser.run(data, context):
                 yield r
         except NameError, e:
             print e
@@ -590,14 +639,14 @@ class SubParser(Parser):
     def getResult(self, value):
         return self._result
     
-    def run(self, data, dictVars):
+    def run(self, data, context):
         parser = self.getParser()
         data, dataSave = tee(data)
-        for res, data2, _  in parser.run(data, {}):
+        for res, data2, _  in parser.runCF(data):
             if res:
                 result = self.getResult(res.getValue())
-                yield ResultOK(result), data2, dictVars
-        yield ResultFail(), dataSave, dictVars
+                yield ResultOK(result), data2, context
+        yield ResultFail(), dataSave, context
  
         
 class LitParser(SubParser):                

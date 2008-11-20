@@ -135,7 +135,7 @@ class Grammar:
    
         
 def main():            
-  text = '"a?\\"bba"|(b?|c c)|"aa"|"bb"'
+  text = '"a?\\"bba"|(b?|c     c)|"aa"|"bb"'
       
   g = Grammar()
   print g._grammarParser.asTree()
