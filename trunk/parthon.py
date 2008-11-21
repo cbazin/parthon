@@ -145,19 +145,24 @@ class ResultFail(Result):
         return "ResultFail()"
 
 class ExecutionContext:
-    def __init__(self):
+    def __init__(self, context=None):
         self._dictVars = {}
+        if context is not None:
+            self._parsers = context._parsers
+            return
+        self.setDefaultParsers()
+        
+    def setDefaultParsers(self):   
         self._parsers = {}
-        self._parsers["optSpaces"] = optSpaces
-        self._parsers["manySpaces"] = manySpaces
-        self._parsers["comments"] = nothing
-
+        self._parsers["space"] = lit(' ') | lit('\n')
+        self._parsers["comment"] = nothing
+        
     def __getitem__(self, k):
         return self._dictVars[k]        
 
     def __setitem__(self, k, v):
-        self._dictVars[k] = v
-                
+        self._dictVars[k] = v        
+                        
 #class State:
 #    def __init__(self, flux, dictVars):
 #        self.flux = flux
@@ -203,7 +208,7 @@ class Parser:
     def rconjonction(self, other):
         return ConjonctionParser([other, self])
 
-    def conjonctionSpaces(self, separator, other):
+    def conjonctionSeparated(self, separator, other):
         return ConjonctionParser([self, separator, other])
     
     def argsParser(self, fct):
@@ -225,33 +230,10 @@ class Parser:
     
 
     def __sub__(self, other):
-        return self.conjonctionSpaces(ContextualParser("optSpaces"), other)
+        return self.conjonctionSeparated(OptSpacesParser(), other)
     
     def __add__(self, other):
-        return self.conjonctionSpaces(ContextualParser("manySpaces"), other)
-    
-    """    
-    def __or__(self, other):
-        return self.disjonction(other)       
-        
-    def __ror__(self, other):
-        return self.rdisjonction(other)       
-
-    def __div__(self, fct):
-        return self.argsParser(fct)
-                            
-    def __ge__(self, func):
-        return self.function(func)
-    
-    def __rshift__(self, other):
-        return self.conjonction(other)
-
-    def __rrshift__(self, other):
-        return self.rconjonction(other)
-    
-    def __getitem__(self, nomVar):
-        return self.assign(nomVar)
-    """
+        return self.conjonctionSeparated(ManySpacesParser(), other)
     
     def __call__(self, *args, **kwargs):
         return self.__class__(*args, **kwargs)
@@ -261,7 +243,7 @@ class Parser:
 #            yield res
 #       yield ResultFail() 
         
-    def runCF(self, data):
+    def runInSelfContext(self, data, content):
         subContext = ExecutionContext()
         for res, data, _ in self.run(data, subContext):
             yield res, data, _
@@ -280,7 +262,14 @@ class Parser:
         for parser in self.getChildren(total=False):
             strTmp += parser.asTree2(indent+1)
         return strTmp
-        
+
+    def simplify(self):
+        newChildren = []
+        for child in self.getChildren():
+            newChildren.append(child.simplify())            
+        self.setChildren(newChildren)
+        return self
+                        
     def toParser(p):
         if type(p) == str:
             if len(p) == 1:
@@ -335,7 +324,7 @@ class AssignParser(Parser):
     
     def run(self, data, context):
         subContext = ExecutionContext()
-        for res, data, _ in self._parser.runCF(data):
+        for res, data, _ in self._parser.runInSelfContext(data, context):
             if res:
                 context[self.nomVar] = res.getValue()
             yield res, data, context
@@ -355,6 +344,20 @@ class ComposableParser(Parser):
         for p in newChildren:
             self.addChild(Parser.toParser(p))
 
+    def simplify(self):            
+        parserType = self.__class__
+        oldChildren = self.getChildren(True)
+        newChildren = []
+        while oldChildren:
+            child = oldChildren.pop(0)
+            childType = child.__class__
+            if childType == parserType:
+                oldChildren = child.getChildren(True) + oldChildren
+                continue
+            newChildren.append(child.simplify())
+        self.setChildren(newChildren)        
+        return self
+        
     def __repr__(self):
         children = ", ".join(repr(c) for c in self.getChildren())
         return "%s(%s)"%(self.__class__, children)
@@ -411,7 +414,7 @@ class DisjonctionParser(ComposableParser):
         data, dataSave = tee(data)
         for parser in self._children:
             data, data2 = tee(data)
-            for res, data3, _ in parser.runCF(data2):
+            for res, data3, _ in parser.runInSelfContext(data2, context):
                 if res: 
                     yield res, data3, context
         yield ResultFail(), dataSave, context
@@ -431,7 +434,7 @@ class FunctionParser(Parser):
             
     def run(self, data, context):
         data, dataSave = tee(data)
-        for res, data2, context2 in self._parser.runCF(data):
+        for res, data2, context2 in self._parser.runInSelfContext(data, context):
             if not res:
                 continue
             funcArgs, varArgs, varkw, defaults = self.inspectData
@@ -462,15 +465,10 @@ class ArgsParser(Parser):
     
     def run(self, data, context):
         data, dataSave = tee(data)
-        for res, data2, context2 in self._parser.runCF(data):
-#            dataSave, data = tee(dataSave)
+        for res, data2, context2 in self._parser.runInSelfContext(data, context):
             if not res:
                 continue
             funcArgs, varArgs, varkw, defaults = self.inspectData
-        
-#             if varkw:
-#                 dictArgs = dictVars2        
-#             else:            
             dictArgs = {}
             for var in funcArgs:
                 try:
@@ -504,7 +502,7 @@ class SatParser(Parser):
     
     def run(self, data, context):
         data, dataSave = tee(data)
-        for res, data2, _  in self._parser.runCF(data):
+        for res, data2, _  in self._parser.runInSelfContext(data, context):
             if not res:
                 yield ResultFail(), data2, context
             else:
@@ -527,7 +525,7 @@ class FailureParser(Parser):
         
     def run(self, data, context):
         data, dataSave = tee(data)
-        for res, data2, _  in self._parser.runCF(data):
+        for res, data2, _  in self._parser.runInSelfContext(data, context):
             if res:
                 yield ResultFail(), data2, context
             else:
@@ -541,8 +539,6 @@ class ErrorParser(Parser):
 
     def run(self, data, context):
         raise ParseError(data, self._code, self._msg)
-                
-        
                 
         
 class ManyParser(Parser):
@@ -562,7 +558,7 @@ class ManyParser(Parser):
         data, saveData = tee(data)
         listePossibles = [(ResultOK(res), saveData, context)]
         noItem = True
-        for item, data, _ in self._parser.runCF(data):
+        for item, data, _ in self._parser.runInSelfContext(data, context):
             if item:
                 noItem = False
                 for rest, data2, _ in self.runBis(data, ExecutionContext(), False, maximum):
@@ -590,11 +586,16 @@ class NamedParser(Parser):
                 yield r
         except NameError:
             print "The parser: '%s' is not defined"%self._parserName
-        
+
 class ContextualParser(Parser):
     def __init__(self, parserName):                
         Parser.__init__(self, [], [parserName])
         self._parserName = parserName
+
+    def getChildren(self, total=False):
+        if total:
+            return [context._parsers[self._parserName]]
+        return []
 
     def run(self, data, context):
         try:
@@ -603,8 +604,8 @@ class ContextualParser(Parser):
                 yield r
         except KeyError:
             print "The parser: '%s' is not defined"%self._parserName
-        
                 
+            
 class FctParser(Parser):
     def __init__(self, fctName, args=[], kwargs={}):
         Parser.__init__(self, [], [fctName, args, kwargs])
@@ -620,31 +621,45 @@ class FctParser(Parser):
         except NameError, e:
             print e
             print "The parser: '%s' is not defined"%self.fctName
-                    
+
+            
+class FutureCheckerParser(Parser):
+    def __init__(self, parser, result=None):
+        Parser.__init__(self, [parser], [result])
+        self._result = result
+    
+    def run(self, data, context):
+        parser = self.getParser(context)
+        data, dataSave = tee(data)
+        for res, _, _ in parser.runInSelfContext(data, context):
+            if res:
+                yield ResultOk(self._result), dataSave, context
+                break
+        yield ResultFail(), dataSave, context
+        
             
 class SubParser(Parser):
     def __init__(self, lstParsers=None, lstCharacteristics=None):
         Parser.__init__(self, lstParsers, lstCharacteristics)
         self._result = None
-
         
     def getChildren(self, total=False):
         if total:
             return [self.getParser()]
         return []
         
-    def getParser(self):
+    def getParser(self, context):
         raise NotImplementedError
     
-    def getResult(self, value):
+    def getResult(self, value, context):
         return self._result
     
     def run(self, data, context):
-        parser = self.getParser()
+        parser = self.getParser(context)
         data, dataSave = tee(data)
-        for res, data2, _  in parser.runCF(data):
+        for res, data2, _  in parser.runInSelfContext(data, context):
             if res:
-                result = self.getResult(res.getValue())
+                result = self.getResult(res.getValue(), context)
                 yield ResultOK(result), data2, context
         yield ResultFail(), dataSave, context
  
@@ -658,52 +673,63 @@ class LitParser(SubParser):
         else:
             self._result = txt
 
-    def getParser(self):
+    def getParser(self, context):
         def eq(x): 
             return x==self._txt
         return sat (eq)
 
     def __repr__(self):
-        return "%s"%(repr(self._txt))
+        return repr(self._txt)
         
         
 class TextParser(LitParser):                
-
-    def getParser(self):
+    def getParser(self, context):
         if len(self._txt) == 0:
             return nothing
         if len(self._txt) == 1:
-            return lit(self._txt)
-        return ConjonctionParser([lit(c) for c in self._txt])
+            return LitParser(self._txt)
+        return ConjonctionParser([LitParser(c) for c in self._txt])
               
 class EndOfTextParser(SubParser):
-    def getParser(self):
+    def getParser(self, context):
         return fail(item)
 
     def __repr__(self):
         return "eot"
 
 class OptSpacesParser(SubParser):
-    def getParser(self):
-        return manyChars0(space)
+    def getParser(self, context):
+        return manyChars0(context._parsers["space"])
 
     def __repr__(self):
         return "optSpaces"
                     
 class ManySpacesParser(SubParser):
-    def getParser(self):
-        return manyChars(space)
+    def getParser(self, context):
+        return manyChars(context._parsers["space"])
 
     def __repr__(self):
         return "manySpaces"
-                              
+
+
+class NothingParser(SubParser):        
+    def __init__(self, res=None):
+        SubParser.__init__(self, [], [res])
+        self._result = res
+
+    def getParser(self, context):
+        return ConstParser(self._result)
+
+    def __repr__(self):
+        return "nothing"
+                                                
 def debug(a):
     print '-------------'+repr(a)
     return a
 
 item  = CharParser()
 
-nothing = ConstParser()
+nothing = NothingParser()
     
 def fail(p, val=None):
     return FailureParser(p, val)
@@ -826,8 +852,12 @@ def convert(fct):
 
 number = maxiChars(digit)["x"] >= convert(int)
 
-manySpacesParser = manySpaces = ManySpacesParser() #manyChars(space)
-optSpacesParser  = optSpaces  = OptSpacesParser()  #manyChars0(space)
+manySpaces = ManySpacesParser()#ContextualParser("manySpaces") #manyChars(space)
+optSpaces  = OptSpacesParser()#ContextualParser("optSpaces")  #manyChars0(space)
+
+def optSpaced(parser):
+  return optSpaces >> parser >> optSpaces
+
 
 error = ErrorParser()
 

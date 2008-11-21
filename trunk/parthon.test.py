@@ -1,22 +1,4 @@
 from parthon import *
-
-def simplify(parser):
-    parserType = parser.__class__
-    oldChildren = parser.getChildren(True)
-    newChildren = []
-    while oldChildren:
-        child = oldChildren.pop(0)
-        if parserType in (ConjonctionParser, DisjonctionParser):
-            childType = child.__class__
-            if childType == parserType:
-                oldChildren = child.getChildren(True) + oldChildren
-                continue
-        newChildren.append(child)
-    for child in newChildren:
-         simplify(child)
-    parser.setChildren(newChildren) 
-    return parser
-
         
 class Grammar:        
       
@@ -105,11 +87,11 @@ class Grammar:
                                )
     #fact = operation_la(atom, power)
     exprAnd = suite(postFixedAtom, self.conjonction_)
-    exprOr  = operation_la(exprAnd, lit("|"), self.disjonction_)
+    exprOr  = operation_la(exprAnd, optSpaced(lit("|")), self.disjonction_)
 
     expr = exprOr
     
-    self._grammarParser = (optSpaces >> expr["a"] >> optSpaces >> eot) >= iden
+    self._grammarParser = (optSpaced(expr["a"]) >> eot) >= iden
 
     
   def parse(self, text):
@@ -129,7 +111,7 @@ class Grammar:
         print "++++++++"
         print r.getValue().asTree()
         print "--------"
-        print simplify(r.getValue()).asTree()
+        print r.getValue().simplify().asTree()
         print "--------"
         break          
    
