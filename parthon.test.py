@@ -1,7 +1,7 @@
 from parthon import *
 import UserList       
  
-class ListElem:#(UserList.UserList):
+class ListElem2:#(UserList.UserList):
     
     def __init__(self):
         self._elem = None
@@ -35,12 +35,52 @@ class ListElem:#(UserList.UserList):
     def __repr__(self):
         return "<<"+ str(list(self)) +">>"
 
+class ListElem(UserList.UserList):
+    def __init__(self):
+        self._root = self
+        self._elem = None
+        self._prevs = None
+        self._nbElems = 0
+        self._lst = None
+
+    def cloneAndAppend(self, newElem):
+        newList = ListElem()
+        newList._elem = newElem
+        newList._prevs = self
+        newList._root = self._root
+        newList._nbElems = self._nbElems + 1
+        return newList
+
+    def asList(self):
+        if self._lst is None:
+            current = self
+            lst = []
+            while current._prevs is not None:
+                lst.append(current._elem)
+                current = current._prevs
+            lst.reverse()
+            self._lst = lst
+        return self._lst
+
+    def __iter__(self):
+        return iter(self.asList())
+
+    def __len__(self):
+        return self._nbElems
+    
+    def __getitem__(self, i):
+        return self.asList()[i]
+
+    def __repr__(self):
+        return "<<"+ str(self.asList()) +">>"
+    
+
 class Grammar:        
       
   def parser_(self, x):
     if x in self._lstParsers:
         return self._lstParsers[x]
-    def getParser(): 
+    def getParser():
         return self._lstParsers[x]
     return FctParser(getParser)
   
@@ -131,7 +171,7 @@ class Grammar:
                 return Failure
             return c
         basicCharText = item["c"] >= isBasic
-        charText = (txt('\\"', '"') | txt('\\\\', '\\') | basicCharText )
+        charText = (txt("\\\\", "\\") | txt("\\\"", "\"") | basicCharText )
         return (lit('"') >> manyChars(charText)["a"] >> lit('"') >= iden)
 
     parserName = word
@@ -257,11 +297,24 @@ class AnotherGrammar(Grammar):
         return Failure
     return items
 
+  def isTextSep(self, items):
+    if not items == "\"":
+        return Failure
+    return items
+    
+  def isEscape(self, items):
+    if not items == "\\":
+        return Failure
+    return items 
+ 
   def toString(self, items):
     return "".join(items)
    
   def escapedQuote(self, items):
-    return items[1]
+    return '"'
+
+  def escapedEscape(self, items):
+    return '\\'
 
   def postFixMaybe(self, items):
     return self.maybe_
@@ -298,7 +351,8 @@ class AnotherGrammar(Grammar):
     return parser
 
   def parserGetParser(self, items):
-    return self.parser_(items)
+    parser = self.parser_(items)
+    return parser
 
   def parserDisjonction(self, items):
     firstParser = items[0]
@@ -320,18 +374,24 @@ class AnotherGrammar(Grammar):
          atom = modificator[0](atom)
     return atom
 
+  def parserExpression(self, items):
+    return items #| error(7, "Invalid expression")
+
+  def parserAtom(self, items):
+    return items #| error(8, "Invalid atom")
+
   def _parserPostFixedAtom(self, items):
     atom, modificator = items   
-    print "!!!", items
     return modificator(atom)
 
   def newParser(self, items):
     name, _, parser, _ = items
+    #print name
     return self.addParser_(name, parser)
   
   def theEnd(self, items):
-    self._grammarParser = items
- 
+    pass#self._grammarParser = items
+    return items 
 
 def main():           
   text = """
@@ -342,9 +402,11 @@ def main():
     Ss          : S*      => filter;
     Anything    : "%"     => parserAnything;
     Nothing     : "!"     => parserNothing;
-    TextSep     : "\\"";
+    TextSep     : %       => isTextSep;
+    Escape      : %       => isEscape;
+    EscapedEscape : (Escape, Escape) => escapedEscape;
+    EscapedSep  :   (Escape, TextSep) => escapedQuote;
     TextChar    : %       => isValidTextChar;
-    EscapedSep  : "\\\\"" => escapedQuote;
     Maybe       : "?"     => postFixMaybe;
     Many        : "+"     => postFixMany;
     ManyOrZero  : "*"     => postFixManyOrZero;
@@ -354,15 +416,15 @@ def main():
     OpOr        : (Ss, "|", Ss);
     OpBind      : (Ss, "=>", Ss);
     ExprParenthesed : ("(", Ss, Expr, Ss, ")")                 => parserExprParenthesed;
-    Text        : (TextSep, (EscapedSep | TextChar)*, TextSep) => parserText;
+    Text        : (TextSep, (EscapedEscape | EscapedSep | TextChar)*, TextSep) => parserText;
     PostFix     : Maybe|Many|ManyOrZero|InFuture|NotInFuture ;
     Parser      : ParserName                                   => parserGetParser;
-    Atom        : Parser | Text | Nothing | Anything | ExprParenthesed ;
+    Atom        : (Parser | Text | Nothing | Anything | ExprParenthesed) => parserAtom;
     PostFixedAtom : (Atom, (Ss, PostFix)*)                     => parserPostFixedAtom;
     BindedAtom  : (PostFixedAtom, (OpBind, MethodName)?)       => parserBindedAtom;
     ExprAnd     : (BindedAtom, (OpAnd, BindedAtom)*)           => parserConjonction;
     ExprOr      : (ExprAnd, (OpOr, ExprAnd)*)                  => parserDisjonction;
-    Expr        : ExprOr ;
+    Expr        : ExprOr                                       => parserExpression;
     Line        : (ParserName, Ss, ":", Ss, Expr, Ss, ";")     => newParser;
     Grammar     : (Ss, Line)*, Ss;
     Main        : Grammar                                      => theEnd;
@@ -396,41 +458,45 @@ def main():
   grammar2._grammarParser = parser2
   grammar2._grammarParser.simplify()
   parser3 = grammar2.parse(text)
- 
+  
   print "Parsed parser (simplified)"
   grammar3.setBinder(grammar4)
   grammar3._grammarParser = parser3
   grammar3._grammarParser.simplify()
   parser4 = grammar3.parse(text)
- 
+
 
   print "TEST : -------------------------------------------------"
   text2 = """
     Begin  : "(*"                ;         
     End    : "*)"                ;
     Z      : %                    => isChar;
-    N      : C  | (Begin!, End!, Z);           
-    C      : (Begin => open , N*, End => close) => filter     ;
+    BeginOpen : Begin => open;
+    EndClose: End => close;
+    C      : Begin => open , N*, EndClose;
+    CC     : C => filter     ;
+    N      : CC  | (Begin!, End!, Z);           
     Main   :  ((! => start), N*)                 => text; 
   """   
-  grammar4.setBinder(Binder())
   grammar4._grammarParser = parser4
   grammar4._grammarParser.simplify()
   
+  grammar = grammar4
+  grammar.setBinder(Binder())
+  p = grammar.parse(text2)
+  #print "++++++++"
+  #print p
+  #print "++++++++"
+  #print p.asTree()
+  #print "--------"
+  #print p.simplify().asTree()
+  #print "--------"
   
-  p = grammar4.parse(text2)
-  print "++++++++"
-  print p
-  print "++++++++"
-  print p.asTree()
-  print "--------"
-  print p.simplify().asTree()
-  print "--------"
-  
+  print "TEST TEST : --------------------------------------------"
   text3 = "bab(*b(*ba*)b*)b(**)a"*100 
-  print "Input :", text3
+  #print "Input :", text3
   result =parse(p, text3)
   res = result.next()[0].getValue() 
-  print "Output :", res
+  #print "Output :", res
 
 main()

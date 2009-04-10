@@ -134,7 +134,7 @@ class ResultOK(Result):
         return self.value        
         
     def __nonzero__(self):
-        return self.value != Failure
+        return self.value is not Failure
     
     def __repr__(self):
         return "ResultOK(%s)" % repr(self.value)
@@ -601,35 +601,41 @@ class ManyParser(Parser):
         
     def run(self, data, context):
         for res in self.runBis(data, context, self.atLeastOne, self.maximum):
+       #     print res
             yield res
     
-    def future_runBis(self, data, context, atLeastOne=False, maximum=False):
+    def runBis(self, data, context, _, __):
         res = self.init
         data, saveData = tee(data)
         listResults = []
-        if not atLeastOne:
+        if not self.atLeastOne:
             listResults.append((ResultOK(res), saveData, context))
         listStates = [(res, data)]
+        #print "---------------------"
         while listStates:
             res, data = listStates.pop()
             for item, data2, _ in self._parser.runInSelfContext(data, context):
                 if item:
                     data, dataRes = tee(data2)
                     if item.getValue() is not NoResult:
-                        res = self.constructor(res, item.getValue())   
-                    print "::>> (%s)(%s)(%s)"%(res, item)
-                    listStates.append((res, data))                
-                    listResults.append((ResultOK(resInv), dataRes, context))
+                        res2 = self.constructor(res, item.getValue())   
+                    else:
+                        res2 = res 
+                    #print "::>> (%s)(%s)"%(res2, item)
+                    listStates.append((res2, data))                
+                    listResults.append((ResultOK(res2), dataRes, context))
+                
         if not listResults:
             yield ResultFail(), saveData, context
         else:
-            if maximum:
+            if self.maximum:
                 yield listResults[-1]
-            for x in reversed(listResults):
-                yield x      
+            else:
+                for x in reversed(listResults):
+                    yield x      
 
 
-    def runBis(self, data, context, atLeastOne=False, maximum=False):
+    def runBis__(self, data, context, atLeastOne=False, maximum=False):
         res = self.init
         data, saveData = tee(data)
         listePossibles = [(ResultOK(res), saveData, context)]
@@ -937,7 +943,7 @@ def brack(a, p, b):
 space = lit(' ') | lit('\n')
       
 def cnsWord(word, char): 
-    return char + word
+    return word+char
 
 def manyChars(parser): 
     return many(parser, cnsWord, '')
