@@ -600,11 +600,6 @@ class ManyParser(Parser):
         self.maximum = maximum
         
     def run(self, data, context):
-        for res in self.runBis(data, context, self.atLeastOne, self.maximum):
-       #     print res
-            yield res
-    
-    def runBis(self, data, context, _, __):
         res = self.init
         data, saveData = tee(data)
         listResults = []
@@ -634,6 +629,9 @@ class ManyParser(Parser):
                 for x in reversed(listResults):
                     yield x      
 
+    def run__(self, data, context):
+        for res in self.runBis(data, context, self.atLeastOne, self.maximum):
+            yield res
 
     def runBis__(self, data, context, atLeastOne=False, maximum=False):
         res = self.init
