@@ -95,11 +95,16 @@ def parse(parser, data):
         theInput = IterableInput(data)
 
     def iterResult():
+      import time
       context = ExecutionContext()
       try :
+        t0 = time.time()
         for res, data2, context in parser.run(theInput, context):
           if res:
+            t1 = time.time()
+            print "Parsing time in seconds:", t1-t0
             yield res, data2, context
+            t0 = time.time()
       except ParseError, e:
         print "ParseError(%s) : "%(e._code)
         print "  - line %s col %s"%(e._state._line, e._state._col)
@@ -129,7 +134,7 @@ class ResultOK(Result):
         return self.value        
         
     def __nonzero__(self):
-        return True
+        return self.value != Failure
     
     def __repr__(self):
         return "ResultOK(%s)" % repr(self.value)
@@ -153,6 +158,12 @@ class Default:
     def __repr__(self):
         return "Default"
 Default = Default()
+
+class Failure:
+    def __repr__(self):
+        return "Failure"
+Failure = Failure()
+
 
 class ExecutionContext:
     def __init__(self, context=None):
@@ -502,11 +513,10 @@ class ArgsParser(Parser):
 
         
 class SatParser(Parser):
-    def isTrue(self, x):
-        return x        
-    
     def __init__(self, parser, function=None):
-        self.function = function or self.isTrue    
+        def isTrue(x):
+            return x        
+        self.function = function or isTrue    
         Parser.__init__(self, [parser], [self.function])
             
     def test(self, x):
@@ -523,10 +533,34 @@ class SatParser(Parser):
                 yield self.test(res), data2, context
 
     def asText(self):
-        return "sat(%s, %s)"%(self.parser.asText(), func_name(self.function))        
+        return "satParser(%s, %s)"%(self.parser.asText(), func_name(self.function))        
         
     def __repr__(self):
         return "SatParser(%s, %s)"%(self._parser, func_name(self.function))
+
+class ConvertParser(Parser):
+    def __init__(self, parser, function):
+        self.function = function 
+        Parser.__init__(self, [parser], [self.function])
+
+    def convert(self, res):
+        result = self.function(res.getValue())
+        return ResultOK(result)
+
+    def run(self, data, context):
+        data, dataSave = tee(data)
+        for res, data2, _  in self._parser.runInSelfContext(data, context):
+            if not res:
+                yield ResultFail(), data2, context
+            else:
+                yield self.convert(res), data2, context
+
+    def asText(self):
+        return "ConvertParser(%s, %s)"%(self.parser.asText(), func_name(self.function))
+
+    def __repr__(self):
+        return "ConvertParser(%s, %s)"%(self._parser, func_name(self.function))
+
         
 # class NegSatParser(SatParser):
 #     def test(self, x):
@@ -568,7 +602,33 @@ class ManyParser(Parser):
     def run(self, data, context):
         for res in self.runBis(data, context, self.atLeastOne, self.maximum):
             yield res
-        
+    
+    def future_runBis(self, data, context, atLeastOne=False, maximum=False):
+        res = self.init
+        data, saveData = tee(data)
+        listResults = []
+        if not atLeastOne:
+            listResults.append((ResultOK(res), saveData, context))
+        listStates = [(res, data)]
+        while listStates:
+            res, data = listStates.pop()
+            for item, data2, _ in self._parser.runInSelfContext(data, context):
+                if item:
+                    data, dataRes = tee(data2)
+                    if item.getValue() is not NoResult:
+                        res = self.constructor(res, item.getValue())   
+                    print "::>> (%s)(%s)(%s)"%(res, item)
+                    listStates.append((res, data))                
+                    listResults.append((ResultOK(resInv), dataRes, context))
+        if not listResults:
+            yield ResultFail(), saveData, context
+        else:
+            if maximum:
+                yield listResults[-1]
+            for x in reversed(listResults):
+                yield x      
+
+
     def runBis(self, data, context, atLeastOne=False, maximum=False):
         res = self.init
         data, saveData = tee(data)
@@ -580,7 +640,9 @@ class ManyParser(Parser):
                 for rest, data2, _ in self.runBis(data, ExecutionContext(), False, maximum):
                     if rest:
                         if item.getValue() is not NoResult:
-                            res = self.constructor(item.getValue(), rest.getValue())
+                            res = self.constructor(rest.getValue(), item.getValue())
+                        else: 
+                            res = rest.getValue()
                         yield ResultOK(res), data2, context
         if noItem:
             if atLeastOne:
@@ -874,8 +936,8 @@ def brack(a, p, b):
 
 space = lit(' ') | lit('\n')
       
-def cnsWord(w, l): 
-    return w+l
+def cnsWord(word, char): 
+    return char + word
 
 def manyChars(parser): 
     return many(parser, cnsWord, '')
