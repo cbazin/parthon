@@ -493,7 +493,7 @@ def main():
   #print "--------"
   
   print "TEST TEST : --------------------------------------------"
-  text3 = "bab(*b(*ba*)b*)b(**)a"*100 
+  text3 = "bab(*b(*ba*)b*)b(**)a"*500
   #print "Input :", text3
   result =parse(p, text3)
   res = result.next()[0].getValue() 

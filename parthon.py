@@ -55,7 +55,7 @@ class Input:
 
     def tee(self):
         return self.__class__(self._data, self)
-                
+
 class StringInput(Input):
     def readChar(self):
         try:
@@ -185,29 +185,15 @@ class ExecutionContext:
         self._parsers["comment"] = ~(nothing)
     
     def __getitem__(self, k):
-        #print "get : (%s)"% (k)
         try:
             return self._dictVars[k]        
         except TypeError, e:
             raise KeyError(k)
 
     def __setitem__(self, k, v):
-        #print "set : (%s)(%s)"% (k, v)
         if self._dictVars is None:
             self._dictVars = {}        
         self._dictVars[k] = v        
-        
-#class State:
-#    def __init__(self, flux, dictVars):
-#        self.flux = flux
-#        self.dictVars = dictVars
-#    
-#    def getDictVars(self):
-#        return self.dictVars
-#        
-#    def dup(self):        
-#        self.flux, newFlux = tee(self.flux)
-#        return State(newFlux, self.dictVars)
         
 class Parser:
     def __init__(self, children, characteristics):
@@ -594,7 +580,6 @@ class FailureParser(Parser):
         self.value = value
         
     def run(self, data, context):
-        dataSave = data.tee()
         for res, data2, _  in self._parser.runInSelfContext(data, context):
             if res:
                 yield ResultFail(), data2, context
@@ -622,31 +607,33 @@ class ManyParser(Parser):
     def run(self, data, context):
         res = self.init
         listResults = []
+        data1 = data.tee()
         if not self.atLeastOne:
-            listResults.append((ResultOK(res), data, context))
-        listStates = [(res, data)]
+            listResults.append((res, data1, context))
+        listStates = [(res, data1)]
         #print "---------------------"
         while listStates:
             res, stateData = listStates.pop()
             for item, data2, _ in self._parser.runInSelfContext(stateData, context):
                 if item:
-                    dataRes = data2.tee()
+                    #dataRes = data2.tee()
                     if item.getValue() is not NoResult:
                         res2 = self.constructor(res, item.getValue())   
                     else:
                         res2 = res 
                     #print "::>> (%s)(%s)"%(res2, item)
                     listStates.append((res2, data2))                
-                    listResults.append((ResultOK(res2), dataRes, context))
+                    listResults.append((res2, data2, context))
                 
         if not listResults:
             yield ResultFail(), data, context
         else:
             if self.maximum:
-                yield listResults[-1]
+                r, d, c = listResults[-1]
+                yield ResultOK(r), d, c
             else:
-                for x in reversed(listResults):
-                    yield x      
+                for r, d, c in reversed(listResults):
+                    yield ResultOK(r), d, c      
 
     def run__(self, data, context):
         for res in self.runBis(data, context, self.atLeastOne, self.maximum):
@@ -654,7 +641,6 @@ class ManyParser(Parser):
 
     def runBis__(self, data, context, atLeastOne=False, maximum=False):
         res = self.init
-        saveData = data.tee()
         listePossibles = [(ResultOK(res), saveData, context)]
         noItem = True
         for item, data2, _ in self._parser.runInSelfContext(data, context):
@@ -670,11 +656,11 @@ class ManyParser(Parser):
                         yield ResultOK(res), data2, context
         if noItem:
             if atLeastOne:
-                yield ResultFail(), saveData, context
+                yield ResultFail(), data, context
             else:
-                yield ResultOK(self.init), saveData, context
+                yield ResultOK(self.init), data, context
         elif not maximum:
-                yield ResultOK(self.init), saveData, context
+                yield ResultOK(self.init), data, context
 
                 
 class NamedParser(Parser):
@@ -807,10 +793,11 @@ class LitParser(SubParser):
         else:
             self._result = txt
 
+    def eq(self, x): 
+        return x==self._txt
+
     def getParser(self):
-        def eq(x): 
-            return x==self._txt
-        return sat (eq)
+        return sat(self.eq)
 
     def __repr__(self):
         return repr(self._txt)
