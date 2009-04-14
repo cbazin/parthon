@@ -20,7 +20,7 @@ import inspect
 #         it = iter(iterable)
 #         return (gen(it.next), gen(it.next))
 
-class ParseError(Exception):
+class ParseException(Exception):
     def __init__(self, state, code, msg):
         self._state = state
         self._code = code
@@ -50,9 +50,11 @@ class Input:
             self._col += 1
         return c
 
+    def __str__(self):
+        return "%s[%s]"%(self.__class__, self._position)
+
     def tee(self):
-        clone = self.__class__(self._data, self)
-        return self, clone
+        return self.__class__(self._data, self)
                 
 class StringInput(Input):
     def readChar(self):
@@ -65,24 +67,24 @@ class StringInput(Input):
 
 class FileInput(Input):
     def readChar(self):
-        self.data.seek(self._postion)
+        self.data.seek(self._position)
         c = self._data.read()          
         if c == "":
             raise StopIteration
         self._position += 1
         return c
         
-class IterableInput(Input):
-    def tee(self):
-        import itertools
-        return itertools.tee(self._data)
-
-    def readChar(self):
-        return self._data.next()
+#class IterableInput(Input):
+#    def tee(self):
+#        import itertools
+#        return itertools.tee(self._data)
+#
+#    def readChar(self):
+#        return self._data.next()
         
         
-def tee(anInput):
-    return anInput.tee()
+#def tee(anInput):
+#    return anInput.tee()
                  
 def parse(parser, data):
     if isinstance(data, Input):
@@ -105,8 +107,8 @@ def parse(parser, data):
             print "Parsing time in seconds:", t1-t0
             yield res, data2, context
             t0 = time.time()
-      except ParseError, e:
-        print "ParseError(%s) : "%(e._code)
+      except ParseException, e:
+        print "ParseException(%s) : "%(e._code)
         print "  - line %s col %s"%(e._state._line, e._state._col)
         print "  - Error %s - %s"%(e._code, e._msg)  
         
@@ -164,10 +166,14 @@ class Failure:
         return "Failure"
 Failure = Failure()
 
+class ParseError:
+    def __repr(self):
+        return "ParseError"
+ParseError = ParseError()
 
 class ExecutionContext:
     def __init__(self, context=None):
-        self._dictVars = {}
+        self._dictVars = None         
         if context is not None:
             self._parsers = context._parsers
             return
@@ -177,13 +183,20 @@ class ExecutionContext:
         self._parsers = {}
         self._parsers["space"] = ~(lit(' ') | lit('\n'))
         self._parsers["comment"] = ~(nothing)
-        
+    
     def __getitem__(self, k):
-        return self._dictVars[k]        
+        #print "get : (%s)"% (k)
+        try:
+            return self._dictVars[k]        
+        except TypeError, e:
+            raise KeyError(k)
 
     def __setitem__(self, k, v):
+        #print "set : (%s)(%s)"% (k, v)
+        if self._dictVars is None:
+            self._dictVars = {}        
         self._dictVars[k] = v        
-                        
+        
 #class State:
 #    def __init__(self, flux, dictVars):
 #        self.flux = flux
@@ -267,10 +280,12 @@ class Parser:
 #            yield res
 #       yield ResultFail() 
         
-    def runInSelfContext(self, data, content):
-        subContext = ExecutionContext()
-        for res, data, _ in self.run(data, subContext):
-            yield res, data, _
+    def runInSelfContext(self, data, context):
+        newData = data.tee()
+        subContext = ExecutionContext(context)
+        return self.run(newData, subContext)
+        #for res, data, _ in self.run(data, subContext):
+        #    yield res, data, _
 
     def run(self, data, context):
         raise NotImplementedError
@@ -290,6 +305,7 @@ class Parser:
     def simplify(self):
         newChildren = []
         for child in self.getChildren():
+            child = child.getParser()
             newChildren.append(child.simplify())            
         self.setChildren(newChildren)
         return self
@@ -313,7 +329,7 @@ class Parser:
         
     def asText(self):
         return repr(self)
-            
+           
     def __repr__(self):
         characteristics = ", ".join(repr(c) for c in self.getCharacteristics())
         if self._parser is None:
@@ -347,11 +363,11 @@ class AssignParser(Parser):
         self.nomVar = nomVar
     
     def run(self, data, context):
-        subContext = ExecutionContext()
-        for res, data, _ in self._parser.runInSelfContext(data, context):
+        for res, data2, _ in self._parser.runInSelfContext(data, context):
             if res:
                 context[self.nomVar] = res.getValue()
-            yield res, data, context
+            yield res, data2, context
+        yield ResultFail(), data, context
 
     def asText(self):
         return "(%s)[%s]"%(self._parser.asText(), repr(self.nomVar))
@@ -374,7 +390,9 @@ class ComposableParser(Parser):
         newChildren = []
         while oldChildren:
             child = oldChildren.pop(0)
+            child = child.getParser()
             childType = child.__class__
+            #print childType, parserType
             if childType == parserType:
                 oldChildren = child.getChildren(True) + oldChildren
                 continue
@@ -436,13 +454,13 @@ class ConjonctionParser(ComposableParser):
 class DisjonctionParser(ComposableParser):
     
     def run(self, data, context):
-        data, dataSave = tee(data)
+        #newData = data.tee()
+        #print data, dataSave
         for parser in self._children:
-            data, data2 = tee(data)
-            for res, data3, _ in parser.runInSelfContext(data2, context):
+            for res, data2, _ in parser.runInSelfContext(data, context):
                 if res: 
-                    yield res, data3, context
-        yield ResultFail(), dataSave, context
+                    yield res, data2, context
+        yield ResultFail(), data, context
                 
 #    def __repr__(self):
 #        return "DisjonctionParser(%s)"%(self.lstParsers)
@@ -458,7 +476,6 @@ class FunctionParser(Parser):
         self.inspectData = inspect.getargspec(function)
             
     def run(self, data, context):
-        data, dataSave = tee(data)
         for res, data2, context2 in self._parser.runInSelfContext(data, context):
             if not res:
                 continue
@@ -473,7 +490,7 @@ class FunctionParser(Parser):
                     except KeyError:
                         pass
             yield ResultOK(self.function(**dictArgs)), data2, context
-        yield ResultFail(), dataSave, context
+        yield ResultFail(), data, context
     
     def __repr__(self):
         return "FunctionParser(%s, %s)"%(self._parser, func_name(self.function))
@@ -489,7 +506,6 @@ class ArgsParser(Parser):
         self.inspectData = inspect.getargspec(function)        
     
     def run(self, data, context):
-        data, dataSave = tee(data)
         for res, data2, context2 in self._parser.runInSelfContext(data, context):
             if not res:
                 continue
@@ -501,9 +517,9 @@ class ArgsParser(Parser):
                 except KeyError:
                     pass
             parser = self.function(**dictArgs)
-            for res, data2, context3 in parser.run(data2, context):
-                yield res, data2, context
-        yield ResultFail(), dataSave, context
+            for res, data3, context3 in parser.run(data2, context):
+                yield res, data3, context
+        yield ResultFail(), data, context
     
     def __repr__(self):
         return "ArgsParser(%s, %s)"%(self._parser, func_name(self.function))
@@ -525,10 +541,9 @@ class SatParser(Parser):
         return ResultFail()
     
     def run(self, data, context):
-        data, dataSave = tee(data)
         for res, data2, _  in self._parser.runInSelfContext(data, context):
             if not res:
-                yield ResultFail(), data2, context
+                yield ResultFail(), data, context
             else:
                 yield self.test(res), data2, context
 
@@ -541,19 +556,24 @@ class SatParser(Parser):
 class ConvertParser(Parser):
     def __init__(self, parser, function):
         self.function = function 
-        Parser.__init__(self, [parser], [self.function])
+        Parser.__init__(self, [parser], [function])
 
-    def convert(self, res):
-        result = self.function(res.getValue())
+    def convert(self, res, data):
+        value = res.getValue()
+        try:
+            result = self.function(value)
+        except Exception, e:
+            raise ParseException(data, 10001, """Error during conversion : 
+              - value = %s
+              - fct = %s
+              - exception = %s"""%(value, func_name(self.function), e))
         return ResultOK(result)
 
     def run(self, data, context):
-        data, dataSave = tee(data)
         for res, data2, _  in self._parser.runInSelfContext(data, context):
-            if not res:
-                yield ResultFail(), data2, context
-            else:
-                yield self.convert(res), data2, context
+            if res:
+                yield self.convert(res, data), data2, context
+        yield ResultFail(), data, context
 
     def asText(self):
         return "ConvertParser(%s, %s)"%(self.parser.asText(), func_name(self.function))
@@ -574,7 +594,7 @@ class FailureParser(Parser):
         self.value = value
         
     def run(self, data, context):
-        data, dataSave = tee(data)
+        dataSave = data.tee()
         for res, data2, _  in self._parser.runInSelfContext(data, context):
             if res:
                 yield ResultFail(), data2, context
@@ -588,7 +608,7 @@ class ErrorParser(Parser):
         self._msg = msg
 
     def run(self, data, context):
-        raise ParseError(data, self._code, self._msg)
+        raise ParseException(data, self._code, self._msg)
                 
         
 class ManyParser(Parser):
@@ -601,27 +621,26 @@ class ManyParser(Parser):
         
     def run(self, data, context):
         res = self.init
-        data, saveData = tee(data)
         listResults = []
         if not self.atLeastOne:
-            listResults.append((ResultOK(res), saveData, context))
+            listResults.append((ResultOK(res), data, context))
         listStates = [(res, data)]
         #print "---------------------"
         while listStates:
-            res, data = listStates.pop()
-            for item, data2, _ in self._parser.runInSelfContext(data, context):
+            res, stateData = listStates.pop()
+            for item, data2, _ in self._parser.runInSelfContext(stateData, context):
                 if item:
-                    data, dataRes = tee(data2)
+                    dataRes = data2.tee()
                     if item.getValue() is not NoResult:
                         res2 = self.constructor(res, item.getValue())   
                     else:
                         res2 = res 
                     #print "::>> (%s)(%s)"%(res2, item)
-                    listStates.append((res2, data))                
+                    listStates.append((res2, data2))                
                     listResults.append((ResultOK(res2), dataRes, context))
                 
         if not listResults:
-            yield ResultFail(), saveData, context
+            yield ResultFail(), data, context
         else:
             if self.maximum:
                 yield listResults[-1]
@@ -635,13 +654,14 @@ class ManyParser(Parser):
 
     def runBis__(self, data, context, atLeastOne=False, maximum=False):
         res = self.init
-        data, saveData = tee(data)
+        saveData = data.tee()
         listePossibles = [(ResultOK(res), saveData, context)]
         noItem = True
-        for item, data, _ in self._parser.runInSelfContext(data, context):
+        for item, data2, _ in self._parser.runInSelfContext(data, context):
             if item:
                 noItem = False
-                for rest, data2, _ in self.runBis(data, ExecutionContext(), False, maximum):
+                subContext = ExecutionContext(context)
+                for rest, data2, _ in self.runBis(data, subContext, False, maximum):
                     if rest:
                         if item.getValue() is not NoResult:
                             res = self.constructor(rest.getValue(), item.getValue())
@@ -676,8 +696,8 @@ class ContextualParser(Parser):
         self._parserName = parserName
 
     def getChildren(self, total=False):
-        if total:
-            return [context._parsers[self._parserName]]
+        #if total:
+        #    return [context._parsers[self._parserName]]
         return []
 
     def run(self, data, context):
@@ -712,13 +732,11 @@ class FutureCheckerParser(Parser):
         self._result = result
     
     def run(self, data, context):
-        #parser = self.getParser(context)
-        data, dataSave = tee(data)
-        for res, _, _ in self._parser.runInSelfContext(data, context):
+        for res, data2, _ in self._parser.runInSelfContext(data, context):
             if res:
-                yield ResultOK(self._result), dataSave, context
+                yield ResultOK(self._result), data2, context
                 break
-        yield ResultFail(), dataSave, context
+        yield ResultFail(), data, context
 
 class NoFutureCheckerParser(Parser):
     def __init__(self, parser, result=NoResult):
@@ -726,25 +744,25 @@ class NoFutureCheckerParser(Parser):
         self._result = result
     
     def run(self, data, context):
-        #parser = self.getParser(context)
-        data, dataSave = tee(data)
+        noResult = True
         for res, _, _ in self._parser.runInSelfContext(data, context):
             if res:
-                yield ResultFail(), dataSave, context
+                noResult = False
+                yield ResultFail(), data, context
                 break
-        yield ResultOK(self._result), dataSave, context
+        if noResult:
+            yield ResultOK(self._result), data, context
 
 class FilterParser(Parser):
     def __init__(self, parser):
         Parser.__init__(self, [parser], [])
            
     def run(self, data, context):
-        data, dataSave = tee(data)
         for res, data2, _ in self._parser.runInSelfContext(data, context):
             if res:
                 yield ResultOK(NoResult), data2, context
-                break
-        yield ResultFail(), dataSave, context
+                #break
+        yield ResultFail(), data, context
 
 
 class FlowReplacementParser(Parser):
@@ -765,20 +783,19 @@ class SubParser(Parser):
             return [self.getParser()]
         return []
         
-    def getParser(self, context):
+    def getParser(self):
         raise NotImplementedError
     
     def getResult(self, value, context):
         return self._result
     
     def run(self, data, context):
-        parser = self.getParser(context)
-        data, dataSave = tee(data)
+        parser = self.getParser()
         for res, data2, _  in parser.runInSelfContext(data, context):
             if res:
                 result = self.getResult(res.getValue(), context)
                 yield ResultOK(result), data2, context
-        yield ResultFail(), dataSave, context
+        yield ResultFail(), data, context
  
         
 class LitParser(SubParser):                
@@ -790,7 +807,7 @@ class LitParser(SubParser):
         else:
             self._result = txt
 
-    def getParser(self, context):
+    def getParser(self):
         def eq(x): 
             return x==self._txt
         return sat (eq)
@@ -800,30 +817,32 @@ class LitParser(SubParser):
         
         
 class TextParser(LitParser):                
-    def getParser(self, context):
+    def getParser(self):
         if len(self._txt) == 0:
             return nothing
         if len(self._txt) == 1:
             return LitParser(self._txt)
-        return ConjonctionParser([LitParser(c) for c in self._txt])
+        def join(lstStr):
+            return "".join(lstStr)
+        return ConvertParser(ConjonctionParser([LitParser(c) for c in self._txt]), join)
               
 class EndOfTextParser(SubParser):
-    def getParser(self, context):
+    def getParser(self):
         return FailureParser(item, NoResult)
 
     def __repr__(self):
         return "eot"
 
 class OptSpacesParser(SubParser):
-    def getParser(self, context):
-        return manyChars0(context._parsers["space"])
+    def getParser(self):
+        return manyChars0(ContextualParser("space"))
 
     def __repr__(self):
         return "optSpaces"
                     
 class ManySpacesParser(SubParser):
-    def getParser(self, context):
-        return manyChars(context._parsers["space"])
+    def getParser(self):
+        return manyChars(ContextualParser("space"))
 
     def __repr__(self):
         return "manySpaces"
@@ -833,7 +852,7 @@ class NothingParser(SubParser):
         SubParser.__init__(self, [], [res])
         self._result = res
 
-    def getParser(self, context):
+    def getParser(self):
         return ConstParser(self._result)
 
     def __repr__(self):
