@@ -347,7 +347,7 @@ class AnotherGrammar(Grammar):
     parser = items[0]
     method = items[-1]
     if method is not None:
-      return self.bind_(parser, method[1])
+      return self.bind_(parser, method[-1])
     return parser
 
   def parserGetParser(self, items):
